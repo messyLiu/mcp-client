@@ -1,0 +1,4 @@
+# Keep launchers executable by their target shells after checkout.
+*.sh text eol=lf
+*.command text eol=lf
+*.bat text eol=crlf

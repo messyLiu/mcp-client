@@ -12,6 +12,28 @@ MCP Workbench 是一个在本机运行的 MCP 调试客户端。启动后，在�
 
 需要 Node.js 22.12 或更新版本及 npm。首次安装依赖需要联网；内置演示服务在本机运行。
 
+### 一键启动（推荐）
+
+1. 安装 [Node.js](https://nodejs.org/) 22.12 或更新版本（包含 npm）。安装后重新打开终端。
+2. 从 GitHub 下载项目 ZIP 并完整解压，或使用 Git 克隆项目。
+3. 根据系统运行项目根目录中的启动脚本：
+
+| 系统 | 启动方式 |
+| --- | --- |
+| Windows | 双击 `start.bat` |
+| macOS | 双击 `start.command`；若没有执行权限，在项目目录运行 `chmod +x start.command start.sh`，也可以运行 `bash start.sh` |
+| Linux | 在项目目录的终端运行 `bash start.sh` |
+
+启动脚本会自动检查 Node.js 版本，首次运行或依赖变化时执行 `npm ci`，每次启动检查并构建页面，然后启动服务并打开默认浏览器。项目目录可以包含空格。脚本不会自动安装 Node.js。
+
+**停止服务：** 在启动脚本的终端窗口按 `Ctrl+C`，或关闭该终端窗口（如果终端询问是否终止进程，请确认终止）。服务随启动进程结束，端口会释放；关闭浏览器标签页不会停止服务。配置保留在 `.data/`，API Key 和报文等内存数据在服务停止后清空。
+
+如果启动失败，终端会显示错误；交互式终端会等待按回车关闭，Windows 缺少 Node.js 时按任意键关闭。安装失败时检查网络后重新运行脚本。端口占用时先关闭之前的启动窗口，或设置 `PORT`；脚本不会停止其他程序。
+
+可选：运行 `bash start.sh --no-open`（Windows：`start.bat --no-open`）只启动服务，不自动打开浏览器。
+
+### 手动启动
+
 在项目目录执行：
 
 ```bash
@@ -29,7 +51,7 @@ npm start
 
 终端需要保持运行；按 `Ctrl+C` 停止服务。日常使用只需运行 `npm start`。修改前端代码后需要重新执行 `npm run build`。
 
-开发模式：
+### 开发模式
 
 ```bash
 npm run dev
@@ -44,6 +66,8 @@ PORT=3211 npm start
 ```
 
 此时工作台地址变为 `http://127.0.0.1:3211`，演示配置中的 MCP 地址也要手动改为 `http://127.0.0.1:3211/demo/mcp`。开发模式的 Vite 代理默认指向 3210；如需修改开发后端端口，同时调整 `vite.config.ts`。
+
+一键脚本同样读取 `PORT`。macOS/Linux 可运行 `PORT=3211 bash start.sh`；Windows 在命令提示符中依次运行 `set PORT=3211` 和 `start.bat`。
 
 ## 2. 用内置演示完成第一次调用
 
@@ -269,6 +293,7 @@ mcp-client/
 ├── server/              本地 API、MCP 连接管理、报文记录、配置存储、演示服务
 ├── shared/              前后端共用类型
 ├── tests/               本地自动化测试
+├── scripts/             跨平台启动器：环境检查、依赖安装、构建与启动
 ├── docs/
 │   └── screenshots/     README 和使用手册中的正式截图
 ├── .artifacts/          本地调试产物，不提交 Git
@@ -276,6 +301,9 @@ mcp-client/
 ├── .data/               本机配置，不提交 Git
 ├── dist/                前端构建产物，不提交 Git
 ├── README.md            项目介绍与使用手册
+├── start.bat            Windows 双击启动入口
+├── start.command        macOS 双击启动入口
+├── start.sh             macOS/Linux 终端启动入口
 ├── package.json         依赖和运行脚本
 ├── package-lock.json    依赖版本锁定
 ├── index.html           前端页面入口
