@@ -18,7 +18,7 @@ const stop = async () => {
   if (stopping) return;
   stopping = true;
   const deadline = setTimeout(() => process.exit(0), 2000); deadline.unref();
-  await manager.disconnect().catch(() => {});
+  await manager.closeAll();
   server.closeAllConnections();
   server.close(() => process.exit(0));
 };

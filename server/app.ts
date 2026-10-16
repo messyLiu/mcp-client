@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { ProfileStore } from './profiles.js';
 import { TraceStore } from './trace.js';
-import { McpManager } from './mcp.js';
+import { McpPool } from './pool.js';
 import { createDemoHandler } from './demo.js';
 
 import { profileSchema } from './config.js';
@@ -16,7 +16,7 @@ export async function createApp(dataDir: string, distDir: string) {
   const profiles = new ProfileStore(join(dataDir, 'profiles.json'));
   await profiles.load();
   const trace = new TraceStore();
-  const manager = new McpManager(trace);
+  const manager = new McpPool(trace);
   const csrf = randomUUID();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -56,7 +56,7 @@ export async function createApp(dataDir: string, distDir: string) {
     if (!['GET', 'HEAD'].includes(req.method) && req.headers['x-workbench-token'] !== csrf) { res.status(403).json({ error: '页面会话已过期，请刷新后重试' }); return; }
     next();
   });
-  app.get('/api/bootstrap', (_req, res) => res.json({ token: csrf, profiles: profiles.profiles, connection: manager.connection, catalog: manager.catalog }));
+  app.get('/api/bootstrap', (_req, res) => res.json({ token: csrf, profiles: profiles.profiles, connection: manager.connection, catalog: manager.catalog, sessions: manager.sessions, activeProfileId: manager.activeProfileId }));
   app.post('/api/profiles/import', async (req, res) => {
     const { config, preview } = z.object({ config: z.string().min(1).max(256 * 1024), preview: z.boolean().default(true) }).parse(req.body);
     let parsed: ReturnType<typeof parseMcpConfig>;
@@ -80,24 +80,25 @@ export async function createApp(dataDir: string, distDir: string) {
     res.json(await profiles.save(input));
   });
   app.delete('/api/profiles/:id', async (req, res) => {
-    if (manager.connection?.profileId === req.params.id) await manager.disconnect();
+    await manager.remove(req.params.id);
     await profiles.remove(req.params.id);
     res.json({ ok: true });
   });
   app.post('/api/connect', async (req, res) => {
-    const { profileId } = z.object({ profileId: z.string() }).parse(req.body);
+    const { profileId, reuse } = z.object({ profileId: z.string(), reuse: z.boolean().default(false) }).parse(req.body);
     const profile = profiles.get(profileId);
     if (!profile) { res.status(404).json({ error: '连接配置不存在' }); return; }
-    res.json(await manager.connect(profile, profiles.secret(profile.id)));
+    res.json(await manager.connect(profile, profiles.secret(profile.id), reuse));
   });
-  app.post('/api/disconnect', async (_req, res) => { await manager.disconnect(); res.json({ ok: true }); });
-  app.post('/api/catalog/refresh', async (_req, res) => res.json(await manager.refreshCatalog()));
+  const profileTarget = z.object({ profileId: z.string().optional() });
+  app.post('/api/disconnect', async (req, res) => { await manager.disconnect(profileTarget.parse(req.body ?? {}).profileId); res.json({ ok: true }); });
+  app.post('/api/catalog/refresh', async (req, res) => res.json(await manager.refreshCatalog(profileTarget.parse(req.body ?? {}).profileId)));
   app.post('/api/calls', async (req, res) => {
-    const input = z.object({ callId: z.string().uuid(), method: z.enum(['tools/call', 'resources/read', 'prompts/get']), name: z.string().min(1).max(4096), arguments: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
+    const input = z.object({ profileId: z.string().optional(), callId: z.string().uuid(), method: z.enum(['tools/call', 'resources/read', 'prompts/get']), name: z.string().min(1).max(4096), arguments: z.record(z.string(), z.unknown()).default({}) }).parse(req.body);
     if (input.method === 'prompts/get' && Object.values(input.arguments).some(v => typeof v !== 'string')) { res.status(400).json({ error: 'Prompt 参数必须是字符串' }); return; }
-    res.json(await manager.call(input.callId, input.method, input.name, input.arguments));
+    res.json(await manager.call(input.callId, input.method, input.name, input.arguments, input.profileId));
   });
-  app.post('/api/calls/:id/cancel', (req, res) => res.json({ cancelled: manager.cancel(req.params.id) }));
+  app.post('/api/calls/:id/cancel', (req, res) => res.json({ cancelled: manager.cancel(req.params.id, profileTarget.parse(req.body ?? {}).profileId) }));
   app.delete('/api/events', (_req, res) => { trace.clear(); res.json({ ok: true }); });
   app.get('/api/events/export', (_req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="mcp-trace.json"');
@@ -111,14 +112,14 @@ export async function createApp(dataDir: string, distDir: string) {
       if (res.writableLength > 1024 * 1024) { res.destroy(); return; }
       res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
-    send('snapshot', { events: trace.events, connection: manager.connection });
+    send('snapshot', { events: trace.events, sessions: manager.sessions, activeProfileId: manager.activeProfileId });
     const onTrace = (event: unknown) => send('trace', event);
-    const onConnection = (connection: unknown) => send('connection', connection);
-    const onCatalog = (catalog: unknown) => send('catalog', catalog);
+    const onSession = (session: unknown) => send('session', session);
+    const onRemoved = (target: unknown) => send('session-removed', target);
     const onClear = () => send('clear', {});
-    trace.on('trace', onTrace); trace.on('connection', onConnection); trace.on('catalog', onCatalog); trace.on('clear', onClear);
+    trace.on('trace', onTrace); trace.on('session', onSession); trace.on('session-removed', onRemoved); trace.on('clear', onClear);
     const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
-    req.on('close', () => { clearInterval(heartbeat); trace.off('trace', onTrace); trace.off('connection', onConnection); trace.off('catalog', onCatalog); trace.off('clear', onClear); });
+    req.on('close', () => { clearInterval(heartbeat); trace.off('trace', onTrace); trace.off('session', onSession); trace.off('session-removed', onRemoved); trace.off('clear', onClear); });
   });
   app.use('/api', (_req, res) => res.status(404).json({ error: '接口不存在' }));
   app.use(express.static(distDir));

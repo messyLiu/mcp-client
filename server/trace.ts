@@ -39,7 +39,7 @@ export class TraceStore extends EventEmitter {
   clear() { this.events = []; this.emit('clear'); }
 }
 
-export function instrumentFetch(store: TraceStore, connectionId: string, headers: Record<string, string>, fetchImpl: typeof fetch = fetch, allowedOrigin?: string): typeof fetch {
+export function instrumentFetch(store: TraceStore, connectionId: string, headers: Record<string, string>, fetchImpl: typeof fetch = fetch, allowedOrigin?: string, context: Pick<TraceEvent, 'profileId' | 'connectionName'> = {}): typeof fetch {
   return async (input, init) => {
     const targetUrl = new URL(input instanceof Request ? input.url : String(input));
     if (allowedOrigin && targetUrl.origin !== allowedOrigin) throw new Error('MCP 服务要求访问另一来源的端点，已阻止转发认证信息');
@@ -51,7 +51,7 @@ export function instrumentFetch(store: TraceStore, connectionId: string, headers
     const body = typeof init?.body === 'string' ? init.body : undefined;
     let rpc: Record<string, unknown> = {};
     try { rpc = body ? JSON.parse(body) : {}; } catch { /* raw non-JSON request */ }
-    const common = { connectionId, layer: 'http' as const, exchangeId, method: typeof rpc.method === 'string' ? rpc.method : undefined, rpcId: typeof rpc.id === 'string' || typeof rpc.id === 'number' ? rpc.id : undefined };
+    const common = { ...context, connectionId, layer: 'http' as const, exchangeId, method: typeof rpc.method === 'string' ? rpc.method : undefined, rpcId: typeof rpc.id === 'string' || typeof rpc.id === 'number' ? rpc.id : undefined };
     store.add({ ...common, direction: 'out', kind: 'request', data: { url: String(input instanceof Request ? input.url : input), method: init?.method ?? 'GET', headers: Object.fromEntries(requestHeaders), body } });
     let response: Response;
     try {

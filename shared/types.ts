@@ -33,10 +33,13 @@ export interface ToolInfo {
 export interface ResourceInfo { name: string; uri: string; description?: string; mimeType?: string }
 export interface PromptInfo { name: string; description?: string; arguments?: { name: string; description?: string; required?: boolean }[] }
 export interface Catalog { tools: ToolInfo[]; resources: ResourceInfo[]; prompts: PromptInfo[] }
+export interface SessionState { connection: Connection; catalog: Catalog }
 export interface TraceEvent {
   id: number;
   time: string;
   connectionId: string;
+  profileId?: string;
+  connectionName?: string;
   layer: 'rpc' | 'http' | 'system';
   direction: 'out' | 'in' | 'internal';
   kind: string;

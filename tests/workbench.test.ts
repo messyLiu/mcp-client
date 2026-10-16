@@ -86,6 +86,57 @@ test('local workbench end-to-end: modern/legacy, calls, cancel, storage and acce
       assert.equal(response.status, 500);
       assert.ok(trace.events.some(e => e.kind === 'call-error'));
     });
+    await t.test('multiple MCP sessions coexist, route calls independently and reuse connections', async () => {
+      await request('/profiles', { ...config, id: 'second', name: '第二个 MCP' });
+      const before = manager.sessions.find(s => s.connection.profileId === 'demo')!;
+      const firstConnectionId = before.connection.id;
+      const second = await request('/connect', { profileId: 'second' });
+      assert.equal(second.status, 200);
+      assert.equal(manager.sessions.filter(s => s.connection.status === 'connected').length, 2);
+      assert.equal(manager.sessions.find(s => s.connection.profileId === 'demo')!.connection.id, firstConnectionId);
+      const [firstResult, secondResult] = await Promise.all([
+        request('/calls', { profileId: 'demo', callId: randomUUID(), method: 'tools/call', name: 'echo', arguments: { message: 'first-service' } }),
+        request('/calls', { profileId: 'second', callId: randomUUID(), method: 'tools/call', name: 'echo', arguments: { message: 'second-service' } }),
+      ]);
+      assert.equal(firstResult.data.result.content[0].text, 'first-service');
+      assert.equal(secondResult.data.result.content[0].text, 'second-service');
+      assert.ok(trace.events.some(e => e.connectionId === firstConnectionId && JSON.stringify(e.data).includes('first-service')));
+      assert.ok(trace.events.some(e => e.connectionId === second.data.connection.id && JSON.stringify(e.data).includes('second-service')));
+      const count = trace.events.length;
+      const reused = await request('/connect', { profileId: 'demo', reuse: true });
+      assert.equal(reused.data.connection.id, firstConnectionId);
+      assert.equal(trace.events.length, count, 'switching back must not repeat the handshake');
+      await request('/disconnect', { profileId: 'second' });
+      assert.equal(manager.sessions.find(s => s.connection.profileId === 'second')!.connection.status, 'disconnected');
+      assert.equal(manager.sessions.find(s => s.connection.profileId === 'demo')!.connection.status, 'connected');
+      const stillWorks = await request('/calls', { profileId: 'demo', callId: randomUUID(), method: 'tools/call', name: 'echo', arguments: { message: 'still-online' } });
+      assert.equal(stillWorks.data.result.content[0].text, 'still-online');
+    });
+    await t.test('trace ownership survives switching, disconnect and reconnect', async () => {
+      const oldId = manager.sessions.find(s => s.connection.profileId === 'demo')!.connection.id;
+      const historicalIds = trace.events.filter(e => e.profileId === 'demo').map(e => e.id);
+      assert.ok(historicalIds.length > 0);
+      const secondEvents = trace.events.filter(e => e.profileId === 'second');
+      assert.ok(secondEvents.length > 0, 'disconnected MCP retains its traces');
+      assert.ok(secondEvents.every(e => e.connectionName === '第二个 MCP'));
+      const reconnected = await request('/connect', { profileId: 'demo' });
+      assert.equal(reconnected.status, 200);
+      assert.notEqual(reconnected.data.connection.id, oldId);
+      const currentEvents = trace.events.filter(e => e.profileId === 'demo');
+      assert.ok(historicalIds.every(id => currentEvents.some(e => e.id === id)));
+      assert.ok(currentEvents.some(e => e.connectionId === oldId));
+      assert.ok(currentEvents.some(e => e.connectionId === reconnected.data.connection.id));
+      assert.ok(trace.events.every(e => e.profileId && e.connectionName), 'RPC, HTTP and system events all carry their MCP identity');
+      const exported = await (await fetch(base + '/api/events/export')).json();
+      assert.ok(exported.events.some((e: {profileId: string; connectionId: string}) => e.profileId === 'demo' && e.connectionId === oldId));
+    });
+    await t.test('a failed additional connection does not disrupt an online MCP', async () => {
+      await request('/profiles', { ...config, id: 'missing-key', name: '缺少凭证', auth: 'bearer' });
+      assert.equal((await request('/connect', { profileId: 'missing-key' })).status, 500);
+      assert.equal(manager.sessions.find(s => s.connection.profileId === 'missing-key')!.connection.status, 'error');
+      assert.equal(manager.sessions.find(s => s.connection.profileId === 'demo')!.connection.status, 'connected');
+      await request('/connect', { profileId: 'demo', reuse: true });
+    });
     await t.test('legacy handshake, timeout, and credentials stay out of stored profiles and traces', async () => {
       await request('/profiles', { ...config, protocol: 'legacy', timeoutMs: 1000, auth: 'bearer', apiKey: 'workbench-test-secret', headers: [{ name: 'X-Custom-Key', value: 'header-test-secret' }] });
       const connection = await request('/connect', { profileId: 'demo' });
@@ -110,7 +161,7 @@ test('local workbench end-to-end: modern/legacy, calls, cancel, storage and acce
       assert.equal(trace.events.length, 0);
     });
   } finally {
-    await manager.disconnect();
+    await manager.closeAll();
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
