@@ -6,4 +6,5 @@ dist/
 .env
 .env.*
 !.env.example
-workbench-preview.png
+# Local debugging output and temporary screenshots
+.artifacts/
